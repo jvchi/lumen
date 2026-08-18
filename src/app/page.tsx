@@ -1,3 +1,5 @@
-import PipelineLab from "@/components/pipeline-lab";
+import DualModeShell from "@/components/dual-mode-shell";
 
-export default function Home() { return <PipelineLab />; }
+export default function Home() {
+  return <DualModeShell />;
+}

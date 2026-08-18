@@ -45,3 +45,46 @@ export type PipelineResult = {
   playback: PlaybackDescriptor;
 };
 
+export type SportsProvider = {
+  id: string;
+  name: string;
+  urlTemplate: string;
+  isDefault?: boolean;
+};
+
+export type SportsLeague = {
+  id: string;
+  name: string;
+  query: string;
+};
+
+export type SportsScore = {
+  home: number | null;
+  away: number | null;
+  status: "live" | "upcoming" | "final";
+  minute: string | null;
+  kickoffTime: string | null;
+};
+
+export type SportsEvent = {
+  id: string;
+  title: string;
+  league: string;
+  homeTeam: string;
+  awayTeam: string;
+  date: string | null;
+  score: SportsScore;
+  thumbnailUrl: string | null;
+  embedUrl: string | null;
+  highlightsUrl: string | null;
+  source: string;
+};
+
+export type SportsPlaybackDescriptor = {
+  provider: string;
+  mode: "embed" | "hls";
+  url: string;
+  eventId: string;
+  eventTitle: string;
+  availableProviders?: SportsProvider[];
+};
