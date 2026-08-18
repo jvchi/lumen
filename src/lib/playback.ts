@@ -3,7 +3,9 @@ import { buildProviderUrl, getAvailableProviders, getProvider } from "./provider
 
 export function buildEmbedUrl(title: Pick<Title, "id" | "imdbId">, episode?: EpisodeSelection) {
   const template = process.env.VIDSRC_EMBED_URL_TEMPLATE;
-  if (!template) throw new Error("VIDSRC_EMBED_URL_TEMPLATE is not configured.");
+  if (!template) {
+    return buildProviderUrl(getProvider(), title, episode);
+  }
   if (episode === undefined && /\{season\}|\{episode\}/.test(template)) throw new Error("TV embed template requires season and episode.");
   return template.replaceAll("{tmdbId}", String(title.id)).replaceAll("{imdbId}", title.imdbId ?? "").replaceAll("{season}", String(episode?.season ?? "")).replaceAll("{episode}", String(episode?.episode ?? ""));
 }
