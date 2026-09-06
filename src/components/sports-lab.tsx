@@ -65,7 +65,13 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
   }, [leagueId, query]);
 
   useEffect(() => {
+    const originalOpen = window.open;
+    window.open = function () {
+      showToast("Popup blocked by Zero-Ad Shield");
+      return null;
+    };
     return () => {
+      window.open = originalOpen;
       if (toastTimer.current) window.clearTimeout(toastTimer.current);
     };
   }, []);
@@ -204,22 +210,27 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
         <div>
           {events.map((event) => (
             <article key={event.id}>
-              <h3>{event.title}</h3>
-              <p>{event.league}</p>
+              <div>
+                {event.homeBadge && <img src={event.homeBadge} alt="" width={24} height={24} style={{ objectFit: "contain" }} />}
+                <h3>{event.title}</h3>
+                {event.awayBadge && <img src={event.awayBadge} alt="" width={24} height={24} style={{ objectFit: "contain" }} />}
+              </div>
               <p>
-                {event.score.home ?? "-"} - {event.score.away ?? "-"}
-                {event.score.minute ? ` · ${event.score.minute}` : ""}
-                {event.score.kickoffTime ? ` · ${event.score.kickoffTime}` : ""}
+                {event.score.status === "live" ? "🔴 LIVE" : event.score.status === "upcoming" ? "⏰ UPCOMING" : "FINAL"} · {event.league}
               </p>
-              <p>{event.score.status}</p>
+              <p>
+                {event.score.minute ? `Minute: ${event.score.minute}` : ""}
+                {event.score.kickoffTime ? ` · Kickoff: ${event.score.kickoffTime}` : ""}
+                {event.streamCount ? ` · ${event.streamCount} streams` : ""}
+              </p>
               <p>{event.source}</p>
               <div>
                 <button type="button" onClick={() => void playEvent(event)}>
-                  Watch
+                  Watch Live
                 </button>
                 {event.embedUrl && (
                   <a href={buildSportsEmbedUrl(activeProvider || providers[0]?.id || "scorebat", event.id, event.title)} target="_blank" rel="noreferrer">
-                    Open provider URL
+                    External link
                   </a>
                 )}
               </div>

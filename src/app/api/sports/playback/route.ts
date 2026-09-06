@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { createSportsPlaybackDescriptor, findSportsEvent } from "@/lib/sports-providers";
+import { findSportsEvent, resolveSportsPlayback } from "@/lib/sports-providers";
 import { logPipeline, requestId } from "@/lib/log";
 import type { SportsEvent } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const id = requestId();
@@ -20,7 +22,7 @@ export async function GET(request: Request) {
     logPipeline(id, "sports.playback.start", { eventId, provider, eventTitle, league, query });
     const event = findSportsEvent(eventId, query, league);
     const resolvedTitle = event?.title ?? eventTitle ?? `Match ${eventId}`;
-    const playback = createSportsPlaybackDescriptor(eventId, resolvedTitle, provider);
+    const playback = await resolveSportsPlayback(eventId, resolvedTitle, provider);
     const resolvedEvent: SportsEvent =
       event ?? {
         id: eventId,

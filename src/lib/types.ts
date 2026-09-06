@@ -78,6 +78,10 @@ export type SportsEvent = {
   embedUrl: string | null;
   highlightsUrl: string | null;
   source: string;
+  sources?: Array<{ source: string; id: string }>;
+  streamCount?: number;
+  homeBadge?: string | null;
+  awayBadge?: string | null;
 };
 
 export type SportsPlaybackDescriptor = {
@@ -87,4 +91,12 @@ export type SportsPlaybackDescriptor = {
   eventId: string;
   eventTitle: string;
   availableProviders?: SportsProvider[];
+  streams?: Array<{
+    id: string;
+    streamNo: number;
+    language: string;
+    hd: boolean;
+    embedUrl: string;
+    source: string;
+  }>;
 };
