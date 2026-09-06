@@ -77,18 +77,33 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
 
     window.open = function (url?: string | URL) {
       const targetStr = typeof url === "string" ? url : url?.toString() ?? "";
-      if (targetStr.includes("sportsembed.su") || targetStr.includes("embed.st") || targetStr.includes("scorebat.com")) {
+      if (
+        targetStr.includes("sportsembed.su") ||
+        targetStr.includes("embed.st") ||
+        targetStr.includes("embedindia.st") ||
+        targetStr.includes("scorebat.com")
+      ) {
         return originalOpen.apply(window, arguments as any);
       }
-      showToast("Popup blocked by Zero-Ad Shield");
+      showToast("🚫 Ad popup blocked by Zero-Ad Shield");
       return dummyWindow as unknown as Window;
     };
 
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (playbackUrl) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
       window.open = originalOpen;
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       if (toastTimer.current) window.clearTimeout(toastTimer.current);
     };
-  }, []);
+  }, [playbackUrl]);
 
   function showToast(message: string) {
     setToast(message);
@@ -186,7 +201,6 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
                 key={playbackUrl}
                 title={selectedEvent?.title ?? "Sports playback"}
                 src={playbackUrl}
-                sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
                 referrerPolicy="no-referrer-when-downgrade"
@@ -215,14 +229,14 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
               ))}
             </div>
             <div style={{ marginTop: "8px", fontSize: "0.85rem", opacity: 0.85 }}>
-              <span>🛡️ <strong>Zero-Ad Shield Active:</strong> Popup tabs and redirect ads are strictly sandboxed and blocked.</span>
+              <span>🛡️ <strong>Zero-Ad Shield Active:</strong> Tab redirects and popups are intercepted.</span>
               {selectedEvent?.score.status === "upcoming" ? (
                 <p style={{ margin: "4px 0 0 0", color: "#facc15" }}>
                   ⏰ <strong>Upcoming Match:</strong> Kickoff is scheduled for {selectedEvent.score.kickoffTime || "later today"}. Broadcast streaming feeds activate at kickoff time.
                 </p>
               ) : (
                 <p style={{ margin: "4px 0 0 0" }}>
-                  ⚡ <strong>Alternative Servers:</strong> If Server 1 shows a manifest error, switch to another server button above (e.g. Server 2, Server 3) for alternative live feeds.
+                  ⚡ <strong>Alternative Servers:</strong> If Server 1 shows a loading or manifest error, switch to another server button above (e.g. Server 2, Server 3) for alternative live feeds.
                 </p>
               )}
             </div>
