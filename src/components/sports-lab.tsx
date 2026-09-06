@@ -66,10 +66,24 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
 
   useEffect(() => {
     const originalOpen = window.open;
-    window.open = function () {
-      showToast("Popup blocked by Zero-Ad Shield");
-      return null;
+    const dummyWindow = {
+      focus: () => {},
+      blur: () => {},
+      close: () => {},
+      closed: false,
+      document: {},
+      location: { href: "" },
     };
+
+    window.open = function (url?: string | URL) {
+      const targetStr = typeof url === "string" ? url : url?.toString() ?? "";
+      if (targetStr.includes("sportsembed.su") || targetStr.includes("embed.st") || targetStr.includes("scorebat.com")) {
+        return originalOpen.apply(window, arguments as any);
+      }
+      showToast("Popup blocked by Zero-Ad Shield");
+      return dummyWindow as unknown as Window;
+    };
+
     return () => {
       window.open = originalOpen;
       if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -166,19 +180,26 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
         {playbackUrl ? (
           <div>
             {playbackMode === "hls" ? (
-              <video src={playbackUrl} controls autoPlay playsInline />
+              <video src={playbackUrl} controls autoPlay playsInline style={{ width: "100%", aspectRatio: "16/9", background: "#000" }} />
             ) : (
               <iframe
+                key={playbackUrl}
                 title={selectedEvent?.title ?? "Sports playback"}
                 src={playbackUrl}
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
-                sandbox="allow-scripts allow-same-origin allow-presentation"
+                referrerPolicy="no-referrer"
+                style={{ width: "100%", aspectRatio: "16/9", minHeight: "450px", border: "0", background: "#000" }}
               />
             )}
+            <div>
+              <a href={playbackUrl} target="_blank" rel="noreferrer" style={{ display: "inline-block", margin: "8px 0" }}>
+                ↗ Open stream in standalone player window
+              </a>
+            </div>
             <div role="group" aria-label="Sports providers">
-              <span>Providers</span>
-              {providers.slice(0, 6).map((provider) => (
+              <span>Stream Servers:</span>
+              {providers.slice(0, 10).map((provider) => (
                 <button
                   key={provider.id}
                   type="button"

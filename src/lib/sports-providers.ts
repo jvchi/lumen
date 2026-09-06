@@ -141,7 +141,7 @@ export const DEFAULT_FOOTBALL_MATCHES: SportsEvent[] = [
 
 let MATCH_CACHE: SportsEvent[] = [];
 let MATCH_CACHE_TIME = 0;
-const CACHE_TTL_MS = 25_000;
+const CACHE_TTL_MS = 20_000;
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -158,7 +158,18 @@ function slugify(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-export function inferLeague(title: string, sources?: Array<{ source: string; id: string }>): string {
+export function inferLeague(title: string, rawLeague?: string, sources?: Array<{ source: string; id: string }>): string {
+  if (rawLeague && rawLeague.length > 2) {
+    const l = rawLeague.toLowerCase();
+    if (l.includes("premier") || l.includes("epl")) return "Premier League";
+    if (l.includes("champions") || l.includes("ucl") || l.includes("uefa")) return "UEFA Champions League";
+    if (l.includes("la liga") || l.includes("laliga")) return "La Liga";
+    if (l.includes("serie a") || l.includes("serie_a")) return "Serie A";
+    if (l.includes("bundesliga")) return "Bundesliga";
+    if (l.includes("ligue 1")) return "Ligue 1";
+    return rawLeague;
+  }
+
   const t = title.toLowerCase();
   const sourceStr = (sources || []).map((s) => s.id.toLowerCase()).join(" ");
 
@@ -261,97 +272,153 @@ function matchesQuery(event: SportsEvent, query: string) {
   );
 }
 
-type RawStreamedMatch = {
+export type LiveStreamOption = {
   id: string;
-  title: string;
-  category: string;
-  date: number;
-  poster?: string;
-  popular?: boolean;
-  teams?: {
-    home?: { name?: string; badge?: string };
-    away?: { name?: string; badge?: string };
-  };
-  sources?: Array<{ source: string; id: string }>;
+  streamNo: number;
+  language: string;
+  hd: boolean;
+  embedUrl: string;
+  source: string;
 };
 
-async function fetchUpstreamMatches(): Promise<SportsEvent[]> {
+async function fetchCombinedMatches(): Promise<SportsEvent[]> {
   const now = Date.now();
   if (MATCH_CACHE.length > 0 && now - MATCH_CACHE_TIME < CACHE_TTL_MS) {
     return MATCH_CACHE;
   }
 
+  const events: SportsEvent[] = [];
+  const seenTitles = new Set<string>();
+
+  // 1. Fetch from WatchFooty (899+ matches with direct sportsembed.su embeds)
   try {
-    const [matchesRes, liveRes] = await Promise.all([
-      fetch("https://streamed.pk/api/matches/football", {
-        headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
-        next: { revalidate: 30 },
-      }),
-      fetch("https://streamed.pk/api/matches/live", {
-        headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
-        next: { revalidate: 15 },
-      }).catch(() => null),
-    ]);
-
-    if (!matchesRes.ok) throw new Error(`Upstream returned ${matchesRes.status}`);
-    const rawMatches = (await matchesRes.json()) as RawStreamedMatch[];
-    const liveIds = new Set<string>();
-
-    if (liveRes && liveRes.ok) {
-      const rawLive = (await liveRes.json()) as RawStreamedMatch[];
-      for (const m of rawLive) liveIds.add(m.id);
-    }
-
-    const events: SportsEvent[] = rawMatches.map((m) => {
-      const isLive = liveIds.has(m.id) || (now >= m.date && now - m.date < 115 * 60 * 1000);
-      const isUpcoming = m.date > now;
-      const status: SportsScore["status"] = isLive ? "live" : isUpcoming ? "upcoming" : "final";
-      const minute = isLive
-        ? `${Math.max(1, Math.min(90, Math.floor((now - m.date) / 60000)))}'`
-        : null;
-      const kickoffTime = new Date(m.date).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-
-      const homeTeam = m.teams?.home?.name || m.title.split(" vs ")[0] || "Home Team";
-      const awayTeam = m.teams?.away?.name || m.title.split(" vs ")[1] || "Away Team";
-      const homeBadge = m.teams?.home?.badge ? `https://streamed.pk/api/images/proxy/${m.teams.home.badge}.webp` : null;
-      const awayBadge = m.teams?.away?.badge ? `https://streamed.pk/api/images/proxy/${m.teams.away.badge}.webp` : null;
-      const league = inferLeague(m.title, m.sources);
-
-      return {
-        id: m.id,
-        title: m.title,
-        league,
-        homeTeam,
-        awayTeam,
-        date: new Date(m.date).toISOString().slice(0, 10),
-        score: {
-          home: null,
-          away: null,
-          status,
-          minute,
-          kickoffTime,
-        },
-        thumbnailUrl: m.poster ? `https://streamed.pk${m.poster}` : null,
-        homeBadge,
-        awayBadge,
-        embedUrl: `https://streamed.su/watch/${m.id}`,
-        highlightsUrl: `https://streamed.su/watch/${m.id}`,
-        source: "Streamed / FootyLive",
-        sources: m.sources,
-        streamCount: m.sources?.length || 0,
-      };
+    const wfRes = await fetch("https://api.watchfooty.st/api/v1/matches/football", {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+      next: { revalidate: 20 },
     });
+    if (wfRes.ok) {
+      const rawWf = (await wfRes.json()) as any[];
+      for (const m of rawWf) {
+        if (!m || !m.title) continue;
+        const cleanTitle = m.title.trim();
+        seenTitles.add(cleanTitle.toLowerCase());
 
+        const kickoffTimeMs = m.timestamp || (m.date ? new Date(m.date).getTime() : now);
+        const isLive = m.status === "in" || m.status === "live" || (now >= kickoffTimeMs && now - kickoffTimeMs < 115 * 60 * 1000);
+        const isUpcoming = !isLive && (m.status === "pre" || kickoffTimeMs > now);
+        const status: SportsScore["status"] = isLive ? "live" : isUpcoming ? "upcoming" : "final";
+        const minute = isLive ? (m.currentMinute || `${Math.max(1, Math.min(90, Math.floor((now - kickoffTimeMs) / 60000)))}'`) : null;
+        const kickoffTime = new Date(kickoffTimeMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+
+        const streams: LiveStreamOption[] = Array.isArray(m.streams)
+          ? m.streams.map((s: any, idx: number) => ({
+              id: s.id || `wf-${idx}`,
+              streamNo: idx + 1,
+              language: s.language || "English",
+              hd: s.quality === "HD" || s.quality === "FHD" || s.quality === "WHD",
+              embedUrl: s.url,
+              source: s.source || "watchfooty",
+            }))
+          : [];
+
+        const defaultEmbed = streams[0]?.embedUrl || null;
+        const league = inferLeague(cleanTitle, m.league);
+
+        events.push({
+          id: String(m.matchId || slugify(cleanTitle)),
+          title: cleanTitle,
+          league,
+          homeTeam: m.teams?.home?.name || cleanTitle.split(" vs ")[0] || "Home Team",
+          awayTeam: m.teams?.away?.name || cleanTitle.split(" vs ")[1] || "Away Team",
+          date: new Date(kickoffTimeMs).toISOString().slice(0, 10),
+          score: {
+            home: m.scores?.home ?? null,
+            away: m.scores?.away ?? null,
+            status,
+            minute,
+            kickoffTime,
+          },
+          thumbnailUrl: m.poster ? `https://api.watchfooty.st${m.poster}` : null,
+          homeBadge: m.teams?.home?.logoUrl ? `https://api.watchfooty.st${m.teams.home.logoUrl}` : null,
+          awayBadge: m.teams?.away?.logoUrl ? `https://api.watchfooty.st${m.teams.away.logoUrl}` : null,
+          embedUrl: defaultEmbed,
+          highlightsUrl: defaultEmbed,
+          source: streams.length > 0 ? `Live Broadcast (${streams.length} servers)` : "WatchFooty",
+          streamCount: streams.length,
+        });
+      }
+    }
+  } catch {
+    // Continue to next provider if WatchFooty is slow
+  }
+
+  // 2. Fetch from Streamed.pk (114+ matches with embed.st streams)
+  try {
+    const spRes = await fetch("https://streamed.pk/api/matches/football", {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+      next: { revalidate: 20 },
+    });
+    if (spRes.ok) {
+      const rawSp = (await spRes.json()) as any[];
+      for (const m of rawSp) {
+        if (!m || !m.title) continue;
+        const cleanTitle = m.title.trim();
+        const lowerTitle = cleanTitle.toLowerCase();
+
+        // If WatchFooty already added this match, merge sources
+        const existing = events.find((e) => e.title.toLowerCase() === lowerTitle || lowerTitle.includes(e.title.toLowerCase()));
+        if (existing) {
+          if (m.sources && m.sources.length > 0) {
+            existing.sources = (existing.sources || []).concat(m.sources);
+            existing.streamCount = (existing.streamCount || 0) + m.sources.length;
+          }
+          continue;
+        }
+
+        const kickoffTimeMs = m.date || now;
+        const isLive = now >= kickoffTimeMs && now - kickoffTimeMs < 115 * 60 * 1000;
+        const isUpcoming = kickoffTimeMs > now;
+        const status: SportsScore["status"] = isLive ? "live" : isUpcoming ? "upcoming" : "final";
+        const minute = isLive ? `${Math.max(1, Math.min(90, Math.floor((now - kickoffTimeMs) / 60000)))}'` : null;
+        const kickoffTime = new Date(kickoffTimeMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+        const league = inferLeague(cleanTitle, undefined, m.sources);
+
+        events.push({
+          id: String(m.id || slugify(cleanTitle)),
+          title: cleanTitle,
+          league,
+          homeTeam: m.teams?.home?.name || cleanTitle.split(" vs ")[0] || "Home Team",
+          awayTeam: m.teams?.away?.name || cleanTitle.split(" vs ")[1] || "Away Team",
+          date: new Date(kickoffTimeMs).toISOString().slice(0, 10),
+          score: {
+            home: null,
+            away: null,
+            status,
+            minute,
+            kickoffTime,
+          },
+          thumbnailUrl: m.poster ? `https://streamed.pk${m.poster}` : null,
+          homeBadge: m.teams?.home?.badge ? `https://streamed.pk/api/images/proxy/${m.teams.home.badge}.webp` : null,
+          awayBadge: m.teams?.away?.badge ? `https://streamed.pk/api/images/proxy/${m.teams.away.badge}.webp` : null,
+          embedUrl: null,
+          highlightsUrl: null,
+          source: "Streamed Live",
+          sources: m.sources,
+          streamCount: m.sources?.length || 0,
+        });
+      }
+    }
+  } catch {
+    // Continue
+  }
+
+  if (events.length > 0) {
     MATCH_CACHE = events;
     MATCH_CACHE_TIME = now;
     return events;
-  } catch {
-    return MATCH_CACHE.length > 0 ? MATCH_CACHE : [];
   }
+
+  return MATCH_CACHE.length > 0 ? MATCH_CACHE : DEFAULT_FOOTBALL_MATCHES;
 }
 
 function synthesizeSportsEvent(query: string, league?: string): SportsEvent {
@@ -411,26 +478,28 @@ export async function searchSportsEvents(query?: string, leagueId?: string): Pro
   const league = getSportsLeague(leagueId);
   const leagueQuery = league?.query ?? league?.name ?? leagueId;
 
-  const upstreamEvents = await fetchUpstreamMatches();
-  const allEvents = upstreamEvents.length > 0 ? upstreamEvents : DEFAULT_FOOTBALL_MATCHES;
+  const combinedEvents = await fetchCombinedMatches();
+  const allEvents = combinedEvents.length > 0 ? combinedEvents : DEFAULT_FOOTBALL_MATCHES;
 
   let filtered = allEvents.filter(
     (event) => looksLikeLeagueMatch(event, leagueQuery) && matchesQuery(event, normalizedQuery)
   );
 
-  // If upstream had no matches for the specific query/league, try default fixtures
-  if (filtered.length === 0 && upstreamEvents.length > 0) {
+  // If combined results didn't match the specific query, check default catalog
+  if (filtered.length === 0 && combinedEvents.length > 0) {
     filtered = DEFAULT_FOOTBALL_MATCHES.filter(
       (event) => looksLikeLeagueMatch(event, leagueQuery) && matchesQuery(event, normalizedQuery)
     );
   }
 
   if (filtered.length > 0) {
-    // Sort live matches to top, then upcoming matches
+    // Prioritize matches that have working streams and live matches first
     return filtered.slice().sort((a, b) => {
+      const aStreams = a.streamCount || (a.embedUrl ? 1 : 0);
+      const bStreams = b.streamCount || (b.embedUrl ? 1 : 0);
       if (a.score.status === "live" && b.score.status !== "live") return -1;
       if (b.score.status === "live" && a.score.status !== "live") return 1;
-      return 0;
+      return bStreams - aStreams;
     });
   }
 
@@ -460,44 +529,6 @@ export function createSportsPlaybackDescriptor(
   };
 }
 
-export type LiveStreamOption = {
-  id: string;
-  streamNo: number;
-  language: string;
-  hd: boolean;
-  embedUrl: string;
-  source: string;
-};
-
-export async function fetchLiveStreamsForEvent(sources: Array<{ source: string; id: string }>): Promise<LiveStreamOption[]> {
-  const allStreams: LiveStreamOption[] = [];
-  const prioritySources = ["admin", "delta", "golf", "echo"];
-  const sortedSources = sources.slice().sort((a, b) => prioritySources.indexOf(a.source) - prioritySources.indexOf(b.source));
-
-  await Promise.all(
-    sortedSources.map(async (s) => {
-      try {
-        const response = await fetch(`https://streamed.pk/api/stream/${s.source}/${s.id}`, {
-          headers: { "User-Agent": "Mozilla/5.0", Referer: "https://streamed.pk/" },
-          next: { revalidate: 20 },
-        });
-        if (response.ok) {
-          const streams = (await response.json()) as LiveStreamOption[];
-          if (Array.isArray(streams)) {
-            for (const item of streams) {
-              if (item.embedUrl) allStreams.push({ ...item, source: s.source });
-            }
-          }
-        }
-      } catch {
-        // Skip failed stream endpoints gracefully
-      }
-    })
-  );
-
-  return allStreams;
-}
-
 export async function resolveSportsPlayback(
   eventId: string,
   eventTitle: string,
@@ -505,53 +536,88 @@ export async function resolveSportsPlayback(
 ): Promise<SportsPlaybackDescriptor> {
   const standardProviders = getAvailableSportsProviders();
 
-  // If caller specifically requested a legacy static provider (e.g. ScoreBat, AutoEmbed)
-  const isLegacy = standardProviders.some((p) => p.id === preferredProvider && p.id !== "streamed-su");
-  if (isLegacy && preferredProvider) {
+  // If user explicitly picked a legacy static provider (e.g. ScoreBat, AutoEmbed)
+  const isStaticLegacy = standardProviders.some((p) => p.id === preferredProvider && p.id !== "streamed-su");
+  if (isStaticLegacy && preferredProvider) {
     return createSportsPlaybackDescriptor(eventId, eventTitle, preferredProvider);
   }
 
-  // Find the event
+  // Find event in combined cache or default list
   const event = findSportsEvent(eventId);
-  if (event?.sources && event.sources.length > 0) {
-    const liveStreams = await fetchLiveStreamsForEvent(event.sources);
+  const candidateStreams: LiveStreamOption[] = [];
 
-    if (liveStreams.length > 0) {
-      const dynamicProviders: SportsProvider[] = liveStreams.map((s, idx) => ({
-        id: `stream-${idx}`,
-        name: `${s.language || "English"} [${s.source.toUpperCase()}] ${s.hd ? "⚡ HD" : "SD"}`,
-        urlTemplate: `/api/sports/stream-embed?url=${encodeURIComponent(s.embedUrl)}`,
-        isDefault: idx === 0,
-      }));
-
-      // Find the chosen stream or pick the first HD stream
-      let chosenIdx = 0;
-      if (preferredProvider && preferredProvider.startsWith("stream-")) {
-        const parsedIdx = Number(preferredProvider.replace("stream-", ""));
-        if (!isNaN(parsedIdx) && parsedIdx >= 0 && parsedIdx < liveStreams.length) {
-          chosenIdx = parsedIdx;
-        }
-      } else {
-        const hdIdx = liveStreams.findIndex((s) => s.hd);
-        if (hdIdx >= 0) chosenIdx = hdIdx;
-      }
-
-      const activeStream = liveStreams[chosenIdx] || liveStreams[0];
-      const shieldedUrl = `/api/sports/stream-embed?url=${encodeURIComponent(activeStream.embedUrl)}`;
-
-      return {
-        provider: `stream-${chosenIdx}`,
-        mode: "embed",
-        url: shieldedUrl,
-        eventId,
-        eventTitle,
-        availableProviders: dynamicProviders.concat(standardProviders),
-        streams: liveStreams,
-      };
-    }
+  // 1. Check if event has direct embedUrl (from WatchFooty sportsembed.su)
+  if (event?.embedUrl && event.embedUrl.startsWith("http")) {
+    candidateStreams.push({
+      id: "wf-primary",
+      streamNo: 1,
+      language: "English",
+      hd: true,
+      embedUrl: event.embedUrl,
+      source: "broadcast",
+    });
   }
 
-  // Fallback to default descriptor
+  // 2. Fetch streams for any sources (Streamed.pk)
+  if (event?.sources && event.sources.length > 0) {
+    const prioritySources = ["admin", "delta", "golf", "echo"];
+    const sortedSources = event.sources.slice().sort((a, b) => prioritySources.indexOf(a.source) - prioritySources.indexOf(b.source));
+
+    await Promise.all(
+      sortedSources.map(async (s) => {
+        try {
+          const res = await fetch(`https://streamed.pk/api/stream/${s.source}/${s.id}`, {
+            headers: { "User-Agent": "Mozilla/5.0", Referer: "https://streamed.pk/" },
+            next: { revalidate: 20 },
+          });
+          if (res.ok) {
+            const streams = (await res.json()) as LiveStreamOption[];
+            if (Array.isArray(streams)) {
+              for (const item of streams) {
+                if (item.embedUrl) candidateStreams.push({ ...item, source: s.source });
+              }
+            }
+          }
+        } catch {
+          // Skip
+        }
+      })
+    );
+  }
+
+  if (candidateStreams.length > 0) {
+    const dynamicProviders: SportsProvider[] = candidateStreams.map((s, idx) => ({
+      id: `server-${idx}`,
+      name: `Server ${idx + 1}: ${s.language || "English"} [${s.source.toUpperCase()}] ${s.hd ? "⚡ HD" : "SD"}`,
+      urlTemplate: s.embedUrl,
+      isDefault: idx === 0,
+    }));
+
+    let chosenIdx = 0;
+    if (preferredProvider && preferredProvider.startsWith("server-")) {
+      const parsed = Number(preferredProvider.replace("server-", ""));
+      if (!isNaN(parsed) && parsed >= 0 && parsed < candidateStreams.length) {
+        chosenIdx = parsed;
+      }
+    } else {
+      const hdIdx = candidateStreams.findIndex((s) => s.hd);
+      if (hdIdx >= 0) chosenIdx = hdIdx;
+    }
+
+    const activeStream = candidateStreams[chosenIdx] || candidateStreams[0];
+
+    return {
+      provider: `server-${chosenIdx}`,
+      mode: "embed",
+      url: activeStream.embedUrl, // DIRECT stream embed URL so all internal player scripts & chunks resolve natively
+      eventId,
+      eventTitle,
+      availableProviders: dynamicProviders.concat(standardProviders),
+      streams: candidateStreams,
+    };
+  }
+
+  // Fallback to default ScoreBat or chosen provider
   return createSportsPlaybackDescriptor(eventId, eventTitle, preferredProvider || "scorebat");
 }
 
