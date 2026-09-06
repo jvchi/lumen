@@ -186,9 +186,10 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
                 key={playbackUrl}
                 title={selectedEvent?.title ?? "Sports playback"}
                 src={playbackUrl}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
                 allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
-                referrerPolicy="no-referrer"
+                referrerPolicy="no-referrer-when-downgrade"
                 style={{ width: "100%", aspectRatio: "16/9", minHeight: "450px", border: "0", background: "#000" }}
               />
             )}
@@ -213,7 +214,19 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
                 </button>
               ))}
             </div>
-            <button type="button" onClick={clearPlayback}>
+            <div style={{ marginTop: "8px", fontSize: "0.85rem", opacity: 0.85 }}>
+              <span>🛡️ <strong>Zero-Ad Shield Active:</strong> Popup tabs and redirect ads are strictly sandboxed and blocked.</span>
+              {selectedEvent?.score.status === "upcoming" ? (
+                <p style={{ margin: "4px 0 0 0", color: "#facc15" }}>
+                  ⏰ <strong>Upcoming Match:</strong> Kickoff is scheduled for {selectedEvent.score.kickoffTime || "later today"}. Broadcast streaming feeds activate at kickoff time.
+                </p>
+              ) : (
+                <p style={{ margin: "4px 0 0 0" }}>
+                  ⚡ <strong>Alternative Servers:</strong> If Server 1 shows a manifest error, switch to another server button above (e.g. Server 2, Server 3) for alternative live feeds.
+                </p>
+              )}
+            </div>
+            <button type="button" onClick={clearPlayback} style={{ marginTop: "10px" }}>
               Close player
             </button>
           </div>
@@ -247,7 +260,7 @@ export default function SportsLab({ modeSwitcher }: SportsLabProps) {
               <p>{event.source}</p>
               <div>
                 <button type="button" onClick={() => void playEvent(event)}>
-                  Watch Live
+                  {event.score.status === "live" ? "🔴 Watch Live Now" : event.score.status === "upcoming" ? `⏰ Watch Preview (${event.score.kickoffTime || "Upcoming"})` : "Watch Highlights"}
                 </button>
                 {event.embedUrl && (
                   <a href={buildSportsEmbedUrl(activeProvider || providers[0]?.id || "scorebat", event.id, event.title)} target="_blank" rel="noreferrer">

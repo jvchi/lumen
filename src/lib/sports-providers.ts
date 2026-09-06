@@ -345,6 +345,7 @@ async function fetchCombinedMatches(): Promise<SportsEvent[]> {
           highlightsUrl: defaultEmbed,
           source: streams.length > 0 ? `Live Broadcast (${streams.length} servers)` : "WatchFooty",
           streamCount: streams.length,
+          streams,
         });
       }
     }
@@ -542,12 +543,21 @@ export async function resolveSportsPlayback(
     return createSportsPlaybackDescriptor(eventId, eventTitle, preferredProvider);
   }
 
+  // Ensure combined matches are loaded in serverless environments
+  await fetchCombinedMatches();
+
   // Find event in combined cache or default list
-  const event = findSportsEvent(eventId);
+  const event = findSportsEvent(eventId, undefined, undefined, eventTitle);
   const candidateStreams: LiveStreamOption[] = [];
 
-  // 1. Check if event has direct embedUrl (from WatchFooty sportsembed.su)
-  if (event?.embedUrl && event.embedUrl.startsWith("http")) {
+  // 1. Direct streams from event.streams (WatchFooty)
+  if (event?.streams && event.streams.length > 0) {
+    for (const s of event.streams) {
+      if (s.embedUrl) {
+        candidateStreams.push(s);
+      }
+    }
+  } else if (event?.embedUrl && event.embedUrl.startsWith("http")) {
     candidateStreams.push({
       id: "wf-primary",
       streamNo: 1,
@@ -611,32 +621,72 @@ export async function resolveSportsPlayback(
       mode: "embed",
       url: activeStream.embedUrl, // DIRECT stream embed URL so all internal player scripts & chunks resolve natively
       eventId,
-      eventTitle,
+      eventTitle: event?.title || eventTitle,
       availableProviders: dynamicProviders.concat(standardProviders),
       streams: candidateStreams,
     };
   }
 
-  // Fallback to default ScoreBat or chosen provider
-  return createSportsPlaybackDescriptor(eventId, eventTitle, preferredProvider || "scorebat");
+  // Fallback to event's direct embedUrl or chosen provider
+  const fallbackUrl = event?.embedUrl || buildSportsEmbedUrl(preferredProvider || "scorebat", eventId, eventTitle);
+  return {
+    provider: preferredProvider || "scorebat",
+    mode: "embed",
+    url: fallbackUrl,
+    eventId,
+    eventTitle: event?.title || eventTitle,
+    availableProviders: standardProviders,
+  };
 }
 
 export function getSportsEventCatalog() {
   return DEFAULT_FOOTBALL_MATCHES;
 }
 
-export function findSportsEvent(eventId: string, query?: string, leagueId?: string): SportsEvent | undefined {
-  const cachedMatch = MATCH_CACHE.find((event) => event.id === eventId);
+export function findSportsEvent(
+  eventId: string,
+  query?: string,
+  leagueId?: string,
+  eventTitle?: string
+): SportsEvent | undefined {
+  const cleanTargetId = eventId.toLowerCase().trim();
+  const slugTargetId = slugify(eventId);
+  const slugTitle = eventTitle ? slugify(eventTitle) : "";
+
+  // 1. Direct match by id in MATCH_CACHE
+  const cachedMatch = MATCH_CACHE.find((event) => {
+    const eId = event.id.toLowerCase().trim();
+    return eId === cleanTargetId || slugify(event.id) === slugTargetId;
+  });
   if (cachedMatch) return cachedMatch;
 
-  const exactMatch = DEFAULT_FOOTBALL_MATCHES.find((event) => event.id === eventId);
-  if (exactMatch) return exactMatch;
+  // 2. Direct match by id in DEFAULT_FOOTBALL_MATCHES
+  const exactDefault = DEFAULT_FOOTBALL_MATCHES.find((event) => {
+    const eId = event.id.toLowerCase().trim();
+    return eId === cleanTargetId || slugify(event.id) === slugTargetId;
+  });
+  if (exactDefault) return exactDefault;
 
+  // 3. Match by title or slugified title in MATCH_CACHE
+  if (slugTitle || slugTargetId) {
+    const titleMatch = MATCH_CACHE.find((event) => {
+      const eSlug = slugify(event.title);
+      return (
+        (slugTitle && (eSlug === slugTitle || eSlug.includes(slugTitle) || slugTitle.includes(eSlug))) ||
+        (slugTargetId && (eSlug === slugTargetId || eSlug.includes(slugTargetId) || slugTargetId.includes(eSlug)))
+      );
+    });
+    if (titleMatch) return titleMatch;
+  }
+
+  // 4. Query & League fallback ONLY if explicitly provided
   const normalizedQuery = normalizeQuery(query);
   const league = getSportsLeague(leagueId);
   const leagueQuery = league?.query ?? league?.name ?? leagueId;
-  return (
-    MATCH_CACHE.find((event) => looksLikeLeagueMatch(event, leagueQuery) && matchesQuery(event, normalizedQuery)) ||
-    DEFAULT_FOOTBALL_MATCHES.find((event) => looksLikeLeagueMatch(event, leagueQuery) && matchesQuery(event, normalizedQuery))
-  );
+  if (normalizedQuery || (leagueQuery && leagueQuery !== "Football")) {
+    const matched = MATCH_CACHE.find((event) => looksLikeLeagueMatch(event, leagueQuery) && matchesQuery(event, normalizedQuery));
+    if (matched) return matched;
+  }
+
+  return undefined;
 }

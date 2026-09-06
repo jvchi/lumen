@@ -20,9 +20,10 @@ export async function GET(request: Request) {
 
   try {
     logPipeline(id, "sports.playback.start", { eventId, provider, eventTitle, league, query });
-    const event = findSportsEvent(eventId, query, league);
-    const resolvedTitle = event?.title ?? eventTitle ?? `Match ${eventId}`;
-    const playback = await resolveSportsPlayback(eventId, resolvedTitle, provider);
+    const initialTitle = eventTitle ?? `Match ${eventId}`;
+    const playback = await resolveSportsPlayback(eventId, initialTitle, provider);
+    const event = findSportsEvent(eventId, query, league, initialTitle);
+    const resolvedTitle = event?.title ?? playback.eventTitle ?? initialTitle;
     const resolvedEvent: SportsEvent =
       event ?? {
         id: eventId,
